@@ -79,6 +79,7 @@ const GREEN=[0,255,70], HEAD=[205,255,205], AMBER=[255,176,64], RED=[255,46,46],
 const RAIN_FADE_PER_SEC=170, MUTATE_PER_SEC=45;
 const RAIN_PROFILE={idle:[1.0,.80],listening:[.55,.45],thinking:[2.6,1.0],speaking:[.85,.55]};
 const FACE_ATTACK=700, FACE_RELEASE=1500;
+const FACE_KEEP=.66;   // narrowest share of face.png's width a portrait screen may crop to (her head and braid)
 const THINKING_WORDS=["PROCESSING","THINKING","QUERYING MEMORY","COMPILING RESPONSE","RUNNING IT DOWN"];
 AV.ready(a=>{
   document.title=a.name+" Face in the Code (F)";
@@ -269,9 +270,19 @@ class Face{
     // fit into ~88% of grid height, correcting for narrow cells
     let boxRows=this.rows*.88|0;
     let boxCols=(sw/sh)*boxRows*(this.chh/this.cw)|0;
-    if(boxCols>this.cols*.92|0){
-      const k=(this.cols*.92|0)/boxCols;
-      boxCols=boxCols*k|0;boxRows=boxRows*k|0;
+    const maxCols=this.cols*.92|0;
+    if(boxCols>maxCols){
+      // rain-f: her shirt runs edge to edge, so a narrow (portrait) screen
+      // trims her shoulders instead of shrinking her: keep the full height
+      // and crop the sides, but never past the middle FACE_KEEP of the
+      // width (her head and braid). Only past that does she shrink.
+      const keep=Math.max(maxCols/boxCols,FACE_KEEP);
+      sx+=sw*(1-keep)/2;sw*=keep;
+      boxCols=(sw/sh)*boxRows*(this.chh/this.cw)|0;
+      if(boxCols>maxCols){
+        const k=maxCols/boxCols;
+        boxCols=boxCols*k|0;boxRows=boxRows*k|0;
+      }
     }
     const crop=document.createElement("canvas");
     crop.width=boxCols;crop.height=boxRows;
