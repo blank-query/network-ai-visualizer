@@ -454,6 +454,8 @@ const AV = (() => {
         // hands-free: the voice line is capturing an utterance from this
         // tab's open mic (the listening rings show, as for a press)
         else if (msg.type === "capturing") A.hfCapturing = !!msg.on;
+        // the bridge takes interrupt and abort; an older one gets interrupt_press
+        else if (msg.type === "identity") VI.controls = !!msg.controls;
         // a tap's speech ended (or never came): the server's second tap
         // (also a press whose pointerup never arrived: the voice line has
         // already ended it, and its reply must not wait for the next tap)
@@ -853,6 +855,7 @@ const AV = (() => {
       if (VI.call) { VI.ws.send(JSON.stringify({ type: "hangup" })); return; }
       VI.btnPressed = true;
       viStopPlayback();
+      if (!VI.controls) { sendCtl("interrupt_press"); sendCtl("release"); return; }   // its own stop comes back
       VI.dropUntil = performance.now() + 3000;
       sendCtl("interrupt");
       clearTimeout(VI.holdT);
