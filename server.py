@@ -328,7 +328,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    # a face's build check: the same headers (Last-Modified), no body
+    do_HEAD = do_GET
 
     def log_message(self, *a):
         pass

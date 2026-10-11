@@ -1287,6 +1287,37 @@ const AV = (() => {
     document.body.appendChild(el);
   })();
 
+  /* ------------------------------ self-reload ------------------------------ */
+  // A deploy reaches a face that never reloads (the Kitchen Echo): once a
+  // minute, and on coming back into view, compare core.js's and this page's
+  // Last-Modified with the first reading; once they change, reload (same
+  // URL, same params) the moment nothing is going on.
+  if (!DEMO) (() => {
+    const stamp = () => Promise.all([new URL("core.js", ROOT).href, location.pathname].map(u =>
+      fetch(u, { method: "HEAD", cache: "no-store" })
+        .then(r => r.ok ? r.headers.get("Last-Modified") || "" : "").catch(() => "")))
+      .then(a => a.every(Boolean) ? a.join("|") : "");
+    const busy = () => A.state === "thinking" || A.state === "speaking" || raw.loading ||
+      A.recording || A.hfCapturing || A.readerOpen || A.overlayOpen || A.panelOpen ||
+      (VI && (VI.pressActive || VI.latched || VI.hf || VI.call ||
+              (VI.playCtx && VI.nextPlayTime > VI.playCtx.currentTime - 1))) ||
+      (audio && !audio.paused) ||
+      !!(document.querySelector("#av-term input") || {}).value ||
+      (document.activeElement || {}).tagName === "INPUT";
+    let first = "", stale = false, n = 0;
+    const check = async (now) => {
+      if (!stale && (now === true || ++n % 12 === 0)) {
+        const s = await stamp();
+        if (s && !first) first = s;
+        else if (s && s !== first) stale = true;
+      }
+      if (stale && !busy()) location.reload();
+    };
+    check(true);
+    setInterval(check, 5000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) check(true); });
+  })();
+
   // The last model call's speed in the top-right corner ("43 tok/s", plus
   // the prompt read speed when the server reports it), from the voice
   // line's show_speed; nothing at all without data.
