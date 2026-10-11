@@ -916,7 +916,16 @@ const AV = (() => {
     // the right; the speed readout adds its tok/s when the turn ends
     if (show && show.time) body.innerHTML += '<span class="av-t-time" data-ts0="' +
       esc((raw.speed || {}).ts || "") + '">' + esc(show.time) + "</span>";
-    if (text) body.innerHTML += (body.innerHTML ? " " : "") + linkify(mdInline(esc(text)));
+    // ![alt](path) to a picture this face was shown: the picture, small
+    // (tap: full size); one not shown (yet) stays text until it is
+    if (text) {
+      const pics = [];
+      const h = esc(text).replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, p) =>
+        "\u0000" + pics.push('<span class="av-t-pic" data-key="' + p.split("/").pop() + '">' + m + "</span>") + "\u0000");
+      body.innerHTML += (body.innerHTML ? " " : "") +
+        linkify(mdInline(h)).replace(/\u0000(\d+)\u0000/g, (m, i) => pics[i - 1]);
+      fillPics();
+    }
     if (show && show.path) {
       const b = document.createElement("button");
       b.type = "button"; b.className = "av-t-open";
@@ -928,6 +937,42 @@ const AV = (() => {
     while (log.childElementCount > 120) log.firstElementChild.remove();
     if (atEnd) log.scrollTop = log.scrollHeight;
   };
+  // Pictures a <<show>> card carried, by file name, as blob URLs (short
+  // srcs, so the terminal's innerHTML rewrites don't copy megabytes).
+  const shownPics = {};
+  function fillPics() {
+    if (term) term.log.querySelectorAll(".av-t-pic:not(.on)").forEach(s => {
+      const u = shownPics[s.dataset.key];
+      if (!u) return;
+      const log = term.log, atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      s.className = "av-t-pic on";
+      s.innerHTML = '<img src="' + u + '" style="display:block;max-width:min(100%,320px);max-height:200px;margin:4px 0;border-radius:6px;cursor:zoom-in">';
+      if (atEnd) s.firstChild.onload = () => { log.scrollTop = log.scrollHeight; };
+    });
+  }
+  // A picture at full size over everything, scrolled by dragging; a tap closes it.
+  let picView = null;
+  A.viewPic = (src) => {
+    if (picView) { picView.remove(); picView = null; }
+    if (!src) return;
+    picView = document.createElement("div");
+    picView.style.cssText = "position:fixed;inset:0;z-index:90;background:#000;overflow:auto;touch-action:pan-x pan-y pinch-zoom";
+    const img = new Image();
+    img.src = src; img.style.cssText = "display:block;margin:auto;max-width:none";
+    picView.appendChild(img);
+    let down = null;
+    picView.addEventListener("pointerdown", (e) => { e.stopPropagation(); down = [e.clientX, e.clientY]; });
+    picView.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+      if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 12) A.viewPic(null);
+    });
+    document.body.appendChild(picView);
+  };
+  addEventListener("click", (e) => {
+    const i = e.target.closest && e.target.closest(".av-doc img, .av-t-pic img");
+    if (i) A.viewPic(i.src);
+  });
+
   /* ------------------------------ a little Markdown ----------------------------- */
   // Enough for replies and notes: headings, lists, bold, italics, inline
   // code, rules. Text is escaped first, so a note can never inject markup.
@@ -957,6 +1002,12 @@ const AV = (() => {
       const line = raw.trimEnd(), t = esc(line.trim());
       let m;
       if (!t) { close(); continue; }
+      // a <<show>> picture: the server sends it as one data-URL line
+      if ((m = t.match(/^!\[([^\]]*)\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+\/=]+)\)$/))) {
+        close(); out.push(`<img alt="${m[1]}" src="${m[2]}" style="display:block;width:100%;height:auto;margin:.6em 0;border-radius:6px;cursor:zoom-in">`);
+        if (!shownPics[m[1]]) fetch(m[2]).then(r => r.blob()).then(b => { shownPics[m[1]] = URL.createObjectURL(b); fillPics(); }).catch(() => {});
+        continue;
+      }
       if ((m = t.match(/^(#{1,4})\s+(.*)/))) { close(); out.push(`<h${m[1].length + 1}>${mdInline(m[2])}</h${m[1].length + 1}>`); }
       else if (/^(-{3,}|\*{3,})$/.test(t)) { close(); out.push("<hr>"); }
       else if ((m = t.match(/^[-*]\s+(\[[ x]\]\s+)?(.*)/))) { if (list !== "ul") { close(); out.push("<ul>"); list = "ul"; } out.push(`<li>${mdInline(m[2])}</li>`); }
@@ -1012,7 +1063,7 @@ const AV = (() => {
     reader.addEventListener("keydown", e => e.stopPropagation());
     document.body.appendChild(reader);
   };
-  addEventListener("keydown", (e) => { if (e.key === "Escape" && reader) A.showDoc(null); });
+  addEventListener("keydown", (e) => { if (e.key !== "Escape") return; if (picView) A.viewPic(null); else if (reader) A.showDoc(null); });
 
   /* ------------------------- task panel and picker ------------------------- */
   // Swiped down from the top: what this assistant has going this session,
