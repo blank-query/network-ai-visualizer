@@ -1017,16 +1017,17 @@ const AV = (() => {
   /* ------------------------- task panel and picker ------------------------- */
   // Swiped down from the top: what this assistant has going this session,
   // in three kinds, each with its own icon and color (the bridge's "tasks"
-  // frame); while a cooking session runs on this device, its steps (the
+  // frame), plus any done ones crossed off; while a cooking session runs on this device, its steps (the
   // current one marked) and live countdowns instead. Swiped up, or a tap
   // below it, hides it. The picker: the app's list of assistants this
   // device may use (JarvisApp.assistants()); a tap picks one, nothing else
   // does. Both cover the face, so the app hands them its touches
   // (AV.overlayOpen).
-  let tasks = { waiting: [], running: [], todo: [] }, cook = { steps: [] }, panel = null;
+  let tasks = { waiting: [], running: [], todo: [], done: [] }, cook = { steps: [] }, panel = null;
   const KINDS = [["waiting", "?", "WAITING ON SIR", "255,179,71"],
                  ["running", "⟳", "IN PROGRESS", "90,169,255"],
-                 ["todo", "○", "NOT STARTED", "160,166,172"]];
+                 ["todo", "○", "NOT STARTED", "160,166,172"],
+                 ["done", "✓", "DONE", "160,166,172"]];
   const clock = (t) => { const s = Math.max(0, Math.round(t.at - Date.now() / 1000));
     return t.clock ? new Date(t.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
       : s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "NOW"; };
@@ -1042,7 +1043,8 @@ const AV = (() => {
     }
     const html = KINDS.map(([k, icon, title, rgb]) => !(tasks[k] || []).length ? "" :
       `<div class="av-p-h" style="color:rgb(${rgb})">${icon}&nbsp; ${title}</div>` + tasks[k].map(t =>
-        `<div class="av-p-i" style="color:rgb(${rgb})"><span class="av-p-ic">${icon}</span>${esc(t.text)}</div>`).join("")).join("");
+        `<div class="av-p-i" style="color:rgb(${rgb})${k === "done" ? ";opacity:.45;text-decoration:line-through" : ""}">` +
+        `<span class="av-p-ic">${icon}</span>${esc(t.text)}</div>`).join("")).join("");
     return html || `<div class="av-p-i" style="opacity:.6">Nothing on the list.</div>`;
   }
   function overlay(id, css) {
@@ -1085,7 +1087,7 @@ const AV = (() => {
     panelPaint();
   };
   setInterval(() => { if (panel && ((raw && raw.timers) || []).length) panelPaint(); }, 1000);
-  A.setTasks = (t) => { tasks = { waiting: t.waiting || [], running: t.running || [], todo: t.todo || [] }; panelPaint(); };
+  A.setTasks = (t) => { tasks = { waiting: t.waiting || [], running: t.running || [], todo: t.todo || [], done: t.done || [] }; panelPaint(); };
   A.setCook = (c) => { cook = { steps: c.steps || [], current: c.current || 0 }; panelPaint(); };
   A.sideSwipe = () => {
     let list = [];
