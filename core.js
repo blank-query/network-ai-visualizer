@@ -96,7 +96,8 @@ const AV = (() => {
 
   /* -------------------------------- config -------------------------------- */
   function applyConfig(cfg) {
-    if (cfg.name) { A.name = String(cfg.name); A.label = dotted(A.name); }
+    const nm = Q.get("name") || cfg.name;
+    if (nm) { A.name = String(nm); A.label = dotted(A.name); }
     A.badge = String(cfg.badge || "");
     if (cfg.thinking_sound === false) A._sndWant = false;
     A.faces = cfg.faces || [];
@@ -120,7 +121,10 @@ const AV = (() => {
   })();
   let raw = { state: "idle", level: 0, samples: null, alert: false,
               loading: false };
-  if (!DEMO) {
+  // ?push=1: the app has no face server for this assistant and pushes its
+  // state instead (AV.pushState, from the bridge's "state" frames)
+  A.pushState = (o) => { raw = o; };
+  if (!DEMO && Q.get("push") !== "1") {
     setInterval(async () => {
       try {
         // this device's own state if a dedicated session owns it
@@ -445,6 +449,8 @@ const AV = (() => {
         else if (msg.type === "call") viCall(msg);
         else if (msg.type === "show") msg.close ? A.showDoc(null) : A.showDoc(msg.title, msg.markdown);
         else if (msg.type === "lines") A.termLines(msg.lines);
+        else if (msg.type === "tasks") A.setTasks(msg);
+        else if (msg.type === "cook") A.setCook(msg);
         else if (msg.type === "listen") {
           VI.hfMuted = !!msg.muted;
           viListen(!!msg.on);
@@ -774,9 +780,9 @@ const AV = (() => {
       return true;
     };
     ["pointercancel", "pointerleave"].forEach(evt => stage.addEventListener(evt, endMute));
-    let swipeY0 = null;
+    let swipeY0 = null, swipeX0 = 0;
     stage.addEventListener("pointerdown", (e) => {
-      swipeY0 = e.clientY;
+      swipeY0 = e.clientY; swipeX0 = e.clientX;
       // keep the drag: a swipe down ends over the terminal, which would
       // otherwise swallow the release
       try { stage.setPointerCapture(e.pointerId); } catch (err) {}
@@ -787,7 +793,7 @@ const AV = (() => {
     });
     stage.addEventListener("pointerup", (e) => {
       const y0 = swipeY0; swipeY0 = null;
-      if (y0 != null && tapDownAt && !muteHeld && A.termSwipe(y0, e.clientY)) { tapDownAt = 0; return; }
+      if (y0 != null && tapDownAt && !muteHeld && A.termSwipe(y0, e.clientY, swipeX0, e.clientX)) { tapDownAt = 0; return; }
       if (endMute()) { tapDownAt = 0; return; }
       if (!tapDownAt || e.timeStamp - tapDownAt > 300) { tapDownAt = 0; return; }
       tapDownAt = 0; taps++;
@@ -864,9 +870,16 @@ const AV = (() => {
   // off the orb): up opens the terminal, down closes it. True when it was
   // one (not a tap). Requiring "below" / "above" the orb was too fussy: on
   // a wide window the strip above the orb is thin.
-  A.termSwipe = (y0, y1) => {
-    if (Math.abs(y1 - y0) < 60) return false;
-    A.termShow(y1 < y0);
+  // Up from the face opens the terminal (or closes the task panel), down
+  // closes the terminal (or, with it shut, pulls the task panel down), and
+  // sideways opens the assistant picker where there is one (the app's).
+  A.termSwipe = (y0, y1, x0 = 0, x1 = 0) => {
+    const dy = y1 - y0, dx = x1 - x0;
+    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) >= 60) { A.sideSwipe(); return true; }
+    if (Math.abs(dy) < 60) return false;
+    if (dy < 0) { if (A.panelOpen) A.panelShow(false); else A.termShow(true); }
+    else if (A.termShown) A.termShow(false);
+    else A.panelShow(true);
     return true;
   };
   function termClear() { if (term) term.log.textContent = ""; }
@@ -993,6 +1006,110 @@ const AV = (() => {
     document.body.appendChild(reader);
   };
   addEventListener("keydown", (e) => { if (e.key === "Escape" && reader) A.showDoc(null); });
+
+  /* ------------------------- task panel and picker ------------------------- */
+  // Swiped down from the top: what this assistant has going this session,
+  // in three kinds, each with its own icon and color (the bridge's "tasks"
+  // frame); while a cooking session runs on this device, its steps (the
+  // current one marked) and live countdowns instead. Swiped up, or a tap
+  // below it, hides it. The picker: the app's list of assistants this
+  // device may use (JarvisApp.assistants()); a tap picks one, nothing else
+  // does. Both cover the face, so the app hands them its touches
+  // (AV.overlayOpen).
+  let tasks = { waiting: [], running: [], todo: [] }, cook = { steps: [] }, panel = null;
+  const KINDS = [["waiting", "?", "WAITING ON SIR", "255,179,71"],
+                 ["running", "⟳", "IN PROGRESS", "90,169,255"],
+                 ["todo", "○", "NOT STARTED", "160,166,172"]];
+  const clock = (t) => { const s = Math.max(0, Math.round(t.at - Date.now() / 1000));
+    return t.clock ? new Date(t.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+      : s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "NOW"; };
+  function panelHtml() {
+    const timers = (raw && raw.timers) || [];
+    if (cook.steps.length || timers.length) {
+      return `<div class="av-p-h">COOKING</div>` + cook.steps.map((s, i) =>
+        `<div class="av-p-i" style="opacity:${i === cook.current ? 1 : i < cook.current ? .35 : .65};` +
+        `color:rgb(${i === cook.current ? "150,240,180" : "200,225,210"})">` +
+        `<span class="av-p-ic">${i === cook.current ? "▶" : i < cook.current ? "✓" : i + 1}</span>${esc(s)}</div>`).join("") +
+        timers.slice().sort((a, b) => a.at - b.at).map(t =>
+          `<div class="av-p-i av-p-t"><span>${esc(t.label).toUpperCase()}</span><span>${clock(t)}</span></div>`).join("");
+    }
+    const html = KINDS.map(([k, icon, title, rgb]) => !(tasks[k] || []).length ? "" :
+      `<div class="av-p-h" style="color:rgb(${rgb})">${icon}&nbsp; ${title}</div>` + tasks[k].map(t =>
+        `<div class="av-p-i" style="color:rgb(${rgb})"><span class="av-p-ic">${icon}</span>${esc(t.text)}</div>`).join("")).join("");
+    return html || `<div class="av-p-i" style="opacity:.6">Nothing on the list.</div>`;
+  }
+  function overlay(id, css) {
+    const el = document.createElement("div");
+    el.id = id;
+    el.style.cssText = "position:fixed;inset:0;z-index:85;background:rgba(0,0,0,.45);touch-action:none;" + css;
+    let y0 = null;
+    el.addEventListener("pointerdown", (e) => { e.stopPropagation(); y0 = e.clientY; });
+    el.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+      if (y0 != null && (e.target === el || y0 - e.clientY > 50)) closeOverlays();
+      y0 = null;
+    });
+    document.body.appendChild(el);
+    A.overlayOpen = true;
+    return el;
+  }
+  function closeOverlays() {
+    ["av-panel", "av-pick"].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+    panel = null; A.panelOpen = false; A.overlayOpen = false;
+  }
+  function panelPaint() {
+    if (panel) panel.firstChild.innerHTML = panelHtml();
+  }
+  A.panelShow = (on) => {
+    closeOverlays();
+    if (!on) return;
+    if (!document.getElementById("av-p-css")) document.head.appendChild(Object.assign(
+      document.createElement("style"), { id: "av-p-css", textContent:
+        "#av-panel>div{max-height:62vh;overflow-y:auto;padding:calc(18px + env(safe-area-inset-top)) 22px 18px;" +
+        "background:rgba(4,12,8,.94);border-bottom:1px solid rgba(90,200,130,.35);" +
+        "font:15px/1.55 'SF Mono',Menlo,Consolas,monospace;color:rgb(200,225,210);" +
+        "box-shadow:0 0 30px rgba(0,0,0,.6);touch-action:pan-y}" +
+        ".av-p-h{margin:12px 0 4px;font-size:12px;letter-spacing:.18em;opacity:.9}.av-p-h:first-child{margin-top:0}" +
+        ".av-p-i{display:flex;gap:12px;margin:4px 0}.av-p-ic{flex:0 0 1.4em;text-align:center}" +
+        ".av-p-t{justify-content:space-between;color:rgb(150,230,175)}" }));
+    panel = overlay("av-panel", "");
+    panel.appendChild(document.createElement("div"));
+    A.panelOpen = true;
+    panelPaint();
+  };
+  setInterval(() => { if (panel && ((raw && raw.timers) || []).length) panelPaint(); }, 1000);
+  A.setTasks = (t) => { tasks = { waiting: t.waiting || [], running: t.running || [], todo: t.todo || [] }; panelPaint(); };
+  A.setCook = (c) => { cook = { steps: c.steps || [], current: c.current || 0 }; panelPaint(); };
+  A.sideSwipe = () => {
+    let list = [];
+    try { list = JSON.parse(window.JarvisApp.assistants()); } catch (e) { return false; }
+    if (list.length < 2) return false;
+    closeOverlays();
+    const pick = overlay("av-pick", "display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px");
+    list.forEach(a => {
+      const b = document.createElement("div");
+      b.textContent = (a.current ? "● " : "") + a.name;
+      b.style.cssText = `min-width:62vw;padding:20px 26px;border-radius:14px;text-align:center;cursor:pointer;` +
+        `font:bold 18px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.12em;color:${a.color};` +
+        `border:${a.current ? 3 : 1}px solid ${a.color};background:rgba(10,14,12,.92)`;
+      b.addEventListener("pointerup", (e) => { e.stopPropagation(); closeOverlays(); if (!a.current) window.JarvisApp.pick(a.id); });
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
+      pick.appendChild(b);
+    });
+    return true;
+  };
+  // ?frame=<color>: the picked assistant's color around the screen, its
+  // name in the corner, so who's listening is never in doubt
+  if (Q.get("frame")) (document.readyState === "loading" ? (f) => addEventListener("DOMContentLoaded", f) : (f) => f())(() => {
+    const f = document.createElement("div"), c = Q.get("frame");
+    f.style.cssText = `position:fixed;inset:0;z-index:95;pointer-events:none;border:5px solid ${c};` +
+      "box-sizing:border-box";
+    const n = document.createElement("div");
+    n.textContent = (Q.get("name") || A.name).toUpperCase();
+    n.style.cssText = `position:fixed;left:16px;top:calc(12px + env(safe-area-inset-top));z-index:95;` +
+      `pointer-events:none;color:${c};font:bold 13px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.2em`;
+    document.body.append(f, n);
+  });
 
   function termInit() {
     const css = document.createElement("style");
