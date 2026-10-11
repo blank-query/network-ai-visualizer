@@ -1017,7 +1017,8 @@ const AV = (() => {
   /* ------------------------- task panel and picker ------------------------- */
   // Swiped down from the top: what this assistant has going this session,
   // in three kinds, each with its own icon and color (the bridge's "tasks"
-  // frame), plus any in review and any accepted ones starred and crossed off; while a cooking session runs on this device, its steps (the
+  // frame), plus any in review and any accepted ones starred and crossed off
+  // (top to bottom: waiting, accepted, in review, in progress, not started); while a cooking session runs on this device, its steps (the
   // current one marked) and live countdowns instead. Swiped up, or a tap
   // below it, hides it. The picker: the app's list of assistants this
   // device may use (JarvisApp.assistants()); a tap picks one, nothing else
@@ -1025,10 +1026,10 @@ const AV = (() => {
   // (AV.overlayOpen).
   let tasks = { waiting: [], running: [], review: [], todo: [], done: [] }, cook = { steps: [] }, panel = null;
   const KINDS = [["waiting", "?", "WAITING ON SIR", "255,179,71"],
-                 ["running", "⟳", "IN PROGRESS", "90,169,255"],
+                 ["done", "★", "ACCEPTED", "160,166,172"],
                  ["review", "◇", "IN REVIEW", "180,140,255"],
-                 ["todo", "○", "NOT STARTED", "160,166,172"],
-                 ["done", "★", "ACCEPTED", "160,166,172"]];
+                 ["running", "⟳", "IN PROGRESS", "90,169,255"],
+                 ["todo", "○", "NOT STARTED", "160,166,172"]];
   const clock = (t) => { const s = Math.max(0, Math.round(t.at - Date.now() / 1000));
     return t.clock ? new Date(t.at * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
       : s ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}` : "NOW"; };
