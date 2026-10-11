@@ -107,6 +107,15 @@ const AV = (() => {
     let qh = null; try { qh = JSON.parse(Q.get("hues")); } catch (e) {}
     A.modeHues = qh || cfg.mode_hues || {};
     A.setMode = (m) => viPaintMode(m);
+    // The abort (Interrupt held ~2 s): the face flashes red. The app calls
+    // it too, since it owns the controls in display mode.
+    A.flashAbort = () => {
+      const f = document.createElement("div");
+      f.style.cssText = "position:fixed;inset:0;z-index:65;pointer-events:none;" +
+        "background:radial-gradient(circle,rgba(255,40,40,.55),rgba(160,0,0,.25) 60%,transparent)";
+      document.body.appendChild(f);
+      f.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 900, easing: "ease-out" }).onfinish = () => f.remove();
+    };
     if (DISPLAY) { A._sndWant = false; VI = { connId: Q.get("device") || null }; }
     else if (A.backendWs && !DEMO) viInit();
     if (!DEMO && (DISPLAY || A.backendWs)) termInit();
@@ -267,7 +276,7 @@ const AV = (() => {
       VI.btn.style.display =
         ((A.recording ? lastWorking
                        : A.forThisTab && (A.state === "thinking" || A.state === "speaking"))
-         || VI.btnPressed || VI.call)
+         || VI.btnPressed || VI.call || A.tasks > 0)
           ? "block" : "none";
     // With the terminal open, the pill sits centered in the gap between
     // the orb and the terminal; closed, 28 px off the bottom. It glides
@@ -377,10 +386,11 @@ const AV = (() => {
      Tap anywhere on the face = talk, in every state — while idle it's
      the only turn, while Jarvis is working it QUEUES behind the
      current one (the backend's turn-stream reader lines it up; nothing
-     here stops anything). The one Interrupt button (shown only while
-     working) is the sole way to actually stop a reply: it sends
-     interrupt_press instead of press, and a "stop" control frame back
-     from the server clears whatever audio is already scheduled here. */
+     here stops anything; the reply pauses while you talk and resumes
+     after). The one Interrupt button (shown while working or while
+     background tasks run) is the sole way to stop: a tap sends
+     "interrupt", a 2 s hold "abort" (the Bridge Protocol note), and a
+     "stop" control frame back clears whatever audio is scheduled here. */
   // This tab's own identity for per-device audio/animation routing
   // (compared against AV.activeConn). Generated once and kept in
   // sessionStorage so it survives reloads and reconnects (a server-
@@ -440,7 +450,7 @@ const AV = (() => {
     if (typeof ev.data === "string") {
       try {
         const msg = JSON.parse(ev.data);
-        if (msg.type === "stop") viStopPlayback();
+        if (msg.type === "stop") { viStopPlayback(); VI.dropUntil = 0; }
         // hands-free: the voice line is capturing an utterance from this
         // tab's open mic (the listening rings show, as for a press)
         else if (msg.type === "capturing") A.hfCapturing = !!msg.on;
@@ -464,6 +474,9 @@ const AV = (() => {
     }
     const buf = ev.data;
     if (buf.byteLength < 4) return;
+    // after an Interrupt tap, the cut-off reply's frames still in flight
+    // are dropped until the server's "stop" (or 3 s)
+    if (performance.now() < (VI.dropUntil || 0)) return;
     const rate = new DataView(buf).getUint32(0, true);
     const i16 = new Int16Array(buf.slice(4));
     const ctx = viPlayCtx();
@@ -829,19 +842,27 @@ const AV = (() => {
       "border:1px solid rgba(255,140,140,.45);cursor:pointer;" +
       "touch-action:none;user-select:none;" +
       "box-shadow:0 0 18px rgba(220,40,40,.35),inset 0 0 12px rgba(255,90,90,.18)";
+    // A tap stops the reply (the rest of it is dropped; helpers keep
+    // running). Held about 2 s it aborts: the face flashes red and the
+    // server reads back what's running and asks which to stop. It never
+    // records: tap the face to talk.
+    const sendCtl = (type) => VI.ws && VI.ws.readyState === 1 && VI.ws.send(JSON.stringify({ type }));
     btn.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (VI.call) { VI.ws.send(JSON.stringify({ type: "hangup" })); return; }
-      VI.btnPressed = true;   // held through the state flip to "listening"
-      viPress(true);
+      VI.btnPressed = true;
+      viStopPlayback();
+      VI.dropUntil = performance.now() + 3000;
+      sendCtl("interrupt");
+      clearTimeout(VI.holdT);
+      VI.holdT = setTimeout(() => { if (VI.btnPressed) { A.flashAbort(); sendCtl("abort"); } }, 2000);
     });
     ["pointerup", "pointercancel", "pointerleave"].forEach(evt =>
       btn.addEventListener(evt, (e) => {
         e.stopPropagation();
-        if (!VI.btnPressed) return;     // a HANG UP tap, or a leave without a press
+        clearTimeout(VI.holdT);
         VI.btnPressed = false;
-        viRelease();
       }));
     document.body.appendChild(btn);
     VI = VI || {};   // viConnect() may not have run if backendWs was bad

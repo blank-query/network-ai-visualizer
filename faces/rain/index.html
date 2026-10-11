@@ -45,7 +45,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
    State -> visual:
      idle       dim green rain, slow and hypnotic
-     listening  rain dims, amber ribbon rides YOUR mic
+     listening  rain dims, amber ribbon rides YOUR mic, and the face
+                shows clear and steady: tap it to stop listening
      thinking   rain accelerates + glitch bursts + status word
      speaking   the face emerges, driven by the voice envelope
      alert      new glyphs bleed red + pulsing red frame
@@ -71,6 +72,10 @@ const GREEN=[0,255,70], HEAD=[205,255,205], AMBER=[255,176,64], RED=[255,46,46],
 const RAIN_FADE_PER_SEC=170, MUTATE_PER_SEC=45;
 const RAIN_PROFILE={idle:[1.0,.80],listening:[.55,.45],thinking:[2.6,1.0],speaking:[.85,.55]};
 const FACE_ATTACK=700, FACE_RELEASE=1500;
+// where the head sits in assets/face.png (centre x, centre y as fractions of
+// the image, radius as a fraction of its height): the tap target while
+// listening. Retune if you swap the portrait.
+const FACE_HEAD=[.5,.36,.25];
 const THINKING_WORDS=["PROCESSING","THINKING","QUERYING MEMORY","COMPILING RESPONSE","RUNNING IT DOWN"];
 AV.ready(a=>{
   document.title=a.name+" Face in the Code";
@@ -282,18 +287,23 @@ class Face{
         this.churn.push(300+Math.random()*1300);
       }
     }
+    // the head's circle in this canvas's pixels (FACE_HEAD through the crop)
+    const bx=c0*this.cw, by=r0*this.chh, bw=boxCols*this.cw, bh=boxRows*this.chh;
+    this.head=[bx+(FACE_HEAD[0]*img.width-sx)/sw*bw, by+(FACE_HEAD[1]*img.height-sy)/sh*bh,
+               FACE_HEAD[2]*img.height/sh*bh];
     this.loaded=this.cells.length>0;
     console.log(`[face] mask loaded: ${this.cells.length} cells (${boxCols}x${boxRows} box)`);
   }
-  update(dt,speaking,env,alert,now){
-    const target=(speaking&&this.loaded)?1:0;
+  update(dt,speaking,listening,env,alert,now){
+    const target=((speaking||listening)&&this.loaded)?1:0;
     const tc=target>this.presence?FACE_ATTACK:FACE_RELEASE;
     this.presence+=(target-this.presence)*Math.min(1,dt/tc);
     if(this.presence<.02)return false;
     if(now<this.composeNext)return true;
     this.composeNext=now+1000/30;                  // compose at 30Hz
     const tiers=this.atlas.fams[alert?"red":"green"];
-    const gain=this.presence*(.45+.55*env);
+    // listening: full and steady (no voice to breathe with), the tap target
+    const gain=this.presence*(listening?1.3:.45+.55*env);
     const g=this.g;
     g.fillStyle="#000";g.fillRect(0,0,W,H);
     const dt30=1000/30;
@@ -364,7 +374,7 @@ function drawTracers(n,dt){
 /* ---------------- lettering + chrome ---------------- */
 const D=AV.util.Descrambler;
 let thinkLabel=null, stateTag=null, tagState="";
-let thinkingAmt=0, micHist=[], rainAlpha=0, now=0, room=null;
+let thinkingAmt=0, listenAmt=0, micHist=[], rainAlpha=0, now=0, room=null;
 
 function drawRibbon(){
   micHist.push(AV.micLevel);
@@ -440,7 +450,7 @@ function frame(dt){
   const tgt=state==="thinking"?1:AV.busyElsewhere?.2:0;
   thinkingAmt+=(tgt-thinkingAmt)*Math.min(1,dt/400);
   rain.update(dt,state,AV.alert,thinkingAmt,now);
-  const faceOn=face.update(dt,state==="speaking",AV.env,AV.alert,now);
+  const faceOn=face.update(dt,state==="speaking",state==="listening",AV.env,AV.alert,now);
   ctx.fillStyle="#000";ctx.fillRect(0,0,W,H);
   rainAlpha=Math.min(1,rainAlpha+dt/1500);
   ctx.globalAlpha=rainAlpha;
@@ -452,6 +462,16 @@ function frame(dt){
   room=room==null?roomT:room+(roomT-room)*Math.min(1,dt/140);
   const k=room/H;
   AV.hitCenterX=W/2; AV.hitCenterY=room*.49; AV.hitRadius=Math.min(W,room)*.3;
+  // listening: the rain clears off the face so it reads plainly, and that
+  // face is the target (a tap there stops listening)
+  listenAmt+=((state==="listening"?1:0)-listenAmt)*Math.min(1,dt/400);
+  if(listenAmt>.01&&face.loaded){
+    const hx=W*(1-k)/2+face.head[0]*k, hy=face.head[1]*k, hr=face.head[2]*k;
+    if(state==="listening"){AV.hitCenterX=hx;AV.hitCenterY=hy;AV.hitRadius=hr;}
+    const g=ctx.createRadialGradient(hx,hy,0,hx,hy,hr*1.35);
+    g.addColorStop(0,`rgba(0,0,0,${.85*listenAmt})`);g.addColorStop(.7,`rgba(0,0,0,${.7*listenAmt})`);g.addColorStop(1,"rgba(0,0,0,0)");
+    ctx.fillStyle=g;ctx.fillRect(hx-hr*1.35,hy-hr*1.35,hr*2.7,hr*2.7);
+  }
   if(faceOn){
     ctx.globalCompositeOperation="lighter";      // it glows OUT of the rain
     ctx.drawImage(face.canvas,W*(1-k)/2,0,W*k,H*k);
