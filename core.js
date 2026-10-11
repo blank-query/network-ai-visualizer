@@ -1227,6 +1227,25 @@ const AV = (() => {
     document.body.appendChild(el);
   })();
 
+  // The last model call's speed in the top-right corner ("43 tok/s", plus
+  // the prompt read speed when the server reports it), from the voice
+  // line's show_speed; nothing at all without data.
+  if (!SHOT) setInterval(() => {
+    const sp = (raw && raw.speed) || {};
+    let el = document.getElementById("av-speed");
+    if (!(sp.gen > 0)) { if (el) el.style.display = "none"; return; }
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "av-speed";
+      el.style.cssText = "position:fixed;right:10px;top:calc(6px + env(safe-area-inset-top));z-index:40;" +
+        "pointer-events:none;font:11px/1 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.06em;" +
+        "color:rgb(170,245,195);opacity:.55;text-shadow:0 0 6px rgba(0,0,0,.9);filter:var(--av-mode-filter,none)";
+      document.body.appendChild(el);
+    }
+    el.style.display = "";
+    el.textContent = Math.round(sp.gen) + " tok/s" + (sp.read > 0 ? "  read " + Math.round(sp.read) : "");
+  }, 1000);
+
   /* ----------------------------- thinking sound ---------------------------- */
   let audio = null, sndBtn = null, playing = false;
   A._sndWant = true;

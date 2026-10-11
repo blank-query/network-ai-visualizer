@@ -227,9 +227,16 @@ def _shared_bus():
         active_conn = (BUS / ".voice_active_conn").read_text().strip()
     except OSError:
         pass
+    # The last model call's speed, {gen, read?, ts} tok/s (backtalk's
+    # show_speed); {} = no readout.
+    speed = {}
+    try:
+        speed = json.loads((BUS / ".voice_speed").read_text())
+    except (OSError, ValueError):
+        pass
     return {"state": state, "level": level, "samples": samples,
             "alert": alert, "loading": loading, "rate_limits": rate_limits,
-            "tasks": tasks, "active_conn": active_conn}
+            "tasks": tasks, "active_conn": active_conn, "speed": speed}
 
 
 def _device_entry(device: str) -> dict:
