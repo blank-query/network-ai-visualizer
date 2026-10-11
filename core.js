@@ -912,6 +912,10 @@ const AV = (() => {
       log.appendChild(last);
     }
     const body = last.lastElementChild;
+    // show.time: the turn's timing ("heard 0.8s · first word 2.1s"), dim on
+    // the right; the speed readout adds its tok/s when the turn ends
+    if (show && show.time) body.innerHTML += '<span class="av-t-time" data-ts0="' +
+      esc((raw.speed || {}).ts || "") + '">' + esc(show.time) + "</span>";
     if (text) body.innerHTML += (body.innerHTML ? " " : "") + linkify(mdInline(esc(text)));
     if (show && show.path) {
       const b = document.createElement("button");
@@ -1138,6 +1142,7 @@ const AV = (() => {
       "#av-term .av-t-log>div{margin:4px 0;white-space:pre-wrap;word-wrap:break-word}" +
       "#av-term .av-t-tag{color:rgb(70,140,95)}" +
       "#av-term .av-t-you{color:rgb(200,235,210)}" +
+      "#av-term .av-t-time{float:right;margin-left:10px;font-size:10px;opacity:.45}" +
       "#av-term .av-t-open{display:block;margin:6px 0 2px;padding:5px 12px;font:inherit;cursor:pointer;" +
       "color:rgb(150,240,180);background:rgba(90,200,130,.12);border:1px solid rgba(90,200,130,.45);border-radius:4px}" +
       "#av-term a{color:inherit;text-decoration:underline}" +
@@ -1232,6 +1237,17 @@ const AV = (() => {
   // line's show_speed; nothing at all without data.
   if (!SHOT) setInterval(() => {
     const sp = (raw && raw.speed) || {};
+    // the terminal's newest timing tag gets the turn's speed once it's over
+    // (a new reading since the tag came, and nothing thinking or speaking)
+    // ponytail: a background report's speed can land on the previous turn's tag
+    const tags = document.querySelectorAll("#av-term .av-t-time");
+    const tag = tags[tags.length - 1];
+    if (tag && !tag.dataset.done && sp.gen > 0 && String(sp.ts) !== tag.dataset.ts0
+        && A.state !== "thinking" && A.state !== "speaking") {
+      tag.dataset.done = "1";
+      tag.textContent += " · " + Math.round(sp.gen) + " tok/s" +
+        (sp.read > 0 ? " · read " + Math.round(sp.read) + " tok/s" : "");
+    }
     let el = document.getElementById("av-speed");
     if (!(sp.gen > 0)) { if (el) el.style.display = "none"; return; }
     if (!el) {
