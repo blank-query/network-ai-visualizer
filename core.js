@@ -433,7 +433,9 @@ const AV = (() => {
         // tab's open mic (the listening rings show, as for a press)
         else if (msg.type === "capturing") A.hfCapturing = !!msg.on;
         // a tap's speech ended (or never came): the server's second tap
-        else if (msg.type === "endpoint") { if (VI.latched) viRelease(); }
+        // (also a press whose pointerup never arrived: the voice line has
+        // already ended it, and its reply must not wait for the next tap)
+        else if (msg.type === "endpoint") { if (VI.latched || VI.pressActive) viRelease(); else viUnpause(); }
         else if (msg.type === "line") A.termLine(msg.who, msg.text, msg.show);
         else if (msg.type === "call") viCall(msg);
         else if (msg.type === "show") msg.close ? A.showDoc(null) : A.showDoc(msg.title, msg.markdown);
@@ -456,6 +458,10 @@ const AV = (() => {
     // without a fresh gesture once the page has had one. Never during a
     // queued press, though: that pause is deliberate, and the release
     // resumes it, with everything that arrived meanwhile still queued.
+    // A queued press's pause ends when the press does; if no press is
+    // live any more (an endpoint or release that never resumed it), the
+    // reply must not wait for the NEXT tap to be heard.
+    if (VI.pausedForQueue && !VI.held && !A.recording) viUnpause();
     if (ctx.state !== "running" && !VI.pausedForQueue) ctx.resume().catch(() => {});
     const abuf = ctx.createBuffer(1, i16.length, rate);
     const chan = abuf.getChannelData(0);
@@ -553,8 +559,17 @@ const AV = (() => {
   // after its first press held the mic forever, and with two tabs holding
   // it the recording dropped out constantly (gone the moment the second
   // tab closed). Released on every key-up; reopened on the next press.
+  // Undo a queued press's playback pause (viPress). Every path that ends
+  // a capture comes through here, so a reply never waits for the next tap.
+  function viUnpause() {
+    if (!VI || !VI.pausedForQueue) return;
+    VI.pausedForQueue = false;
+    if (VI.playCtx) VI.playCtx.resume().catch(() => {});
+  }
   function viReleaseCapture() {
-    if (!VI || !VI.proc || VI.hf) return;   // hands-free keeps it
+    if (!VI) return;
+    if (!A.recording) viUnpause();
+    if (!VI.proc || VI.hf) return;   // hands-free keeps it
     try { VI.proc.onaudioprocess = null; VI.proc.disconnect(); } catch (e) {}
     try { VI.mute.disconnect(); } catch (e) {}
     try { VI.capCtx.close(); } catch (e) {}
@@ -660,10 +675,7 @@ const AV = (() => {
       if (!VI || !VI.pressActive) return;
       VI.pressActive = false;
       A.recording = false;
-      if (VI.pausedForQueue) {
-        VI.pausedForQueue = false;
-        if (VI.playCtx) VI.playCtx.resume().catch(() => {});
-      }
+      viUnpause();
       if (VI.ws && VI.ws.readyState === 1)
         VI.ws.send(JSON.stringify({ type: "release" }));
       viReleaseCapture();
