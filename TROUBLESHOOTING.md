@@ -22,7 +22,7 @@ The face is only as alive as the bus it reads. Work down the chain:
 
 ## The mic meters run flat
 
-The listening ribbon and MIC gauges want microphone permission, which the browser asks for on first load. Denied permission is fine; the meters just stay flat while everything else works. To grant it later, click the padlock in the address bar and allow the microphone.
+The listening ribbon and MIC gauges read the microphone only while you're talking to the face (a press, hands-free, or a call); the browser asks for permission the first time. At idle no face holds the mic, so the meters sit flat by design. Denied permission is fine; the meters just stay flat while everything else works. To grant it later, click the padlock in the address bar and allow the microphone.
 
 ## It's choppy
 

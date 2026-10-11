@@ -40,7 +40,8 @@
                    set by the face each frame (CSS px): the focal object
                    is the tap-to-talk target, the space around it takes
                    swipes (terminal) and multi-taps (hands-free)
-     AV.micLevel   0..1 your microphone (only if init({mic:true}))
+     AV.micLevel   0..1 your microphone (only if init({mic:true}), and
+                   only while listening; 0 otherwise)
      AV.name       display name from config ("JARVIS" by default)
      AV.label      the dotted chip label ("J.A.R.V.I.S.")
      AV.badge      optional handle from config ("" by default)
@@ -351,30 +352,15 @@ const AV = (() => {
   // (the tab goes deaf while playing instead, see the capture), and on
   // the Pi the processed audio transcribed noticeably worse.
   const MIC_HF = MIC_RAW;
-  async function micStart() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(MIC_RAW);
-      const ctx = new AudioContext();
-      const src = ctx.createMediaStreamSource(stream);
-      const an = ctx.createAnalyser();
-      an.fftSize = 512;
-      src.connect(an);
-      A._micAnalyser = an;
-      A._micBuf = new Float32Array(an.fftSize);
-      A._micStream = stream;
-      const kick = () => ctx.state === "suspended" && ctx.resume();
-      addEventListener("click", kick); addEventListener("keydown", kick);
-    } catch (e) { /* no mic permission: level stays 0, faces degrade */ }
-  }
 
   /* ------------------------------ voice input ------------------------------
      Tap/click the face to talk: a second push-to-talk, the pointer in
      place of a key. Only active when the config names a `backend_ws`
      (backtalk's browser bridge); off by default. One persistent socket,
      opened at startup so the first tap isn't paying handshake latency.
-     Mic capture is lazy (first press) and reuses whatever stream a
-     face's own mic:true visualization already opened (rain, neural)
-     rather than requesting a second device.
+     Mic capture opens only while listening (a press, hands-free, a
+     call) and is fully released after; a face's mic:true meter reads
+     that same capture stream, so no face holds the mic at idle.
 
      Tap anywhere on the face = talk, in every state — while idle it's
      the only turn, while Jarvis is working it QUEUES behind the
@@ -500,12 +486,15 @@ const AV = (() => {
     VI.sources = [];
     if (VI.playCtx) VI.nextPlayTime = VI.playCtx.currentTime;
   }
-  async function viEnsureCapture() {
-    if (VI.proc) return true;
+  // One open at a time: a press and a hands-free "listen" racing each
+  // other would otherwise each open a stream, and one would never close.
+  function viEnsureCapture() {
+    if (VI.proc) return Promise.resolve(true);
+    return VI.capP || (VI.capP = viOpenCapture().finally(() => { VI.capP = null; }));
+  }
+  async function viOpenCapture() {
     try {
-      const ownStream = VI.hf || !A._micStream;
-      const stream = (!VI.hf && A._micStream)
-        || await navigator.mediaDevices.getUserMedia(VI.hf ? MIC_HF : MIC_RAW);
+      const stream = await navigator.mediaDevices.getUserMedia(VI.hf ? MIC_HF : MIC_RAW);
       const ctx = new AudioContext({ sampleRate: 16000 });
       // Hands-free can start with no gesture on this page (a reload
       // that comes back listening): resume on the first one.
@@ -545,10 +534,18 @@ const AV = (() => {
       const mute = ctx.createGain();
       mute.gain.value = 0;
       src.connect(proc);
+      // a mic:true face's meter (AV.micLevel) taps the same capture
+      if (A._mic) {
+        const an = ctx.createAnalyser();
+        an.fftSize = 512;
+        src.connect(an);
+        A._micAnalyser = an;
+        A._micBuf = new Float32Array(an.fftSize);
+      }
       proc.connect(mute);
       mute.connect(ctx.destination);
       VI.capCtx = ctx; VI.proc = proc; VI.mute = mute;
-      VI.capStream = ownStream ? stream : null;
+      VI.capStream = stream;
       return true;
     } catch (e) { return false; }
   }
@@ -562,7 +559,8 @@ const AV = (() => {
     try { VI.mute.disconnect(); } catch (e) {}
     try { VI.capCtx.close(); } catch (e) {}
     if (VI.capStream) VI.capStream.getTracks().forEach(t => t.stop());
-    VI.proc = VI.capCtx = VI.mute = VI.capStream = null;
+    VI.proc = VI.capCtx = VI.mute = VI.capStream = A._micAnalyser = null;
+    A.micLevel = 0;
   }
   // An intercom call: the mic streams (as for hands-free) until it ends,
   // and the Interrupt pill becomes HANG UP.
@@ -585,6 +583,8 @@ const AV = (() => {
     viReleaseCapture();   // a raw push-to-talk capture, if one is open
     VI.hf = true;
     if (!(await viEnsureCapture())) VI.hf = false;
+    // hands-free went off while the mic was still opening
+    else if (!VI.hf && !VI.held) viReleaseCapture();
   }
   function viPress(isInterrupt) {
     if (!VI || !VI.ws || VI.ws.readyState !== 1) return;
@@ -1169,8 +1169,7 @@ const AV = (() => {
 
   /* ---------------------------------- init --------------------------------- */
   A.init = (opts = {}) => {
-    A._mic = !!opts.mic;
-    if (A._mic && !DEMO) micStart();
+    A._mic = !!opts.mic;   // the meter opens with the capture, never at load
     if (opts.sound !== false) soundInit(); else A._sndWant = false;
     if (DEMO) {
       applyConfig({ name: Q.get("name") || "JARVIS" });
