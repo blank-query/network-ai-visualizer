@@ -446,6 +446,8 @@ const AV = (() => {
         // hands-free: the voice line is capturing an utterance from this
         // tab's open mic (the listening rings show, as for a press)
         else if (msg.type === "capturing") A.hfCapturing = !!msg.on;
+        // a tap's speech ended (or never came): the server's second tap
+        else if (msg.type === "endpoint") { if (VI.latched) viRelease(); }
         else if (msg.type === "line") A.termLine(msg.who, msg.text, msg.show);
         else if (msg.type === "call") viCall(msg);
         else if (msg.type === "show") msg.close ? A.showDoc(null) : A.showDoc(msg.title, msg.markdown);
@@ -620,6 +622,7 @@ const AV = (() => {
         VI.pausedForQueue = true;
       }
       VI.ws.send(JSON.stringify({ type: "press" }));
+      if (VI.latched) VI.ws.send(JSON.stringify({ type: "latch" }));
     });
   }
   // A tapped press is listening: one short soft tone. ponytail: whole
@@ -718,7 +721,7 @@ const AV = (() => {
         }
       }
       e.preventDefault();
-      // Tap to talk, tap again to send (like the desk unit); a hold
+      // Tap to talk (it sends itself when you stop talking), or tap again to send; a hold
       // still ends on release. The second tap sends on touch-down.
       if (VI && VI.latched) { orbDownAt = 0; viRelease(); return; }
       orbDownAt = e.timeStamp; viPress(false);
@@ -734,6 +737,10 @@ const AV = (() => {
         VI.latched = true;
         clearTimeout(VI.latchT);
         VI.latchT = setTimeout(() => { if (VI.latched) viRelease(); }, LATCH_MAX_MS);
+        // the voice line ends it on silence after speech (or drops it if
+        // nothing's said in 5 s) and says "endpoint"; a tap still sends
+        if (VI.pressActive && VI.ws && VI.ws.readyState === 1)
+          VI.ws.send(JSON.stringify({ type: "latch" }));
         viBeep();
       }));
     // Clicks on the blank space around the orb, counted until they stop
