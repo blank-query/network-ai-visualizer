@@ -233,7 +233,11 @@ const AV = (() => {
       || String(A.activeConn) === String(VI.connId);
     A.busyElsewhere = !forThisTab
       && (raw.state === "thinking" || raw.state === "speaking");
-    if (!forThisTab) A.state = "idle";
+    // Every face shows what the model is actually doing, whoever asked
+    // (sir, 2026-10-10: a turn sent from another device left this face
+    // reading IDLE while the model worked). Audio and the Interrupt
+    // button still belong to the asking connection only.
+    A.forThisTab = forThisTab;
     // What a face draws as "listening": this tab recording (a press) or its
     // open mic mid-utterance (hands-free), never the global bus state,
     // which every tab polls. The demo script stands in for both.
@@ -250,11 +254,12 @@ const AV = (() => {
     // Live here would make the button flicker in and out of existence
     // on top of a reply that's still genuinely in flight.
     if (!A.recording)
-      lastWorking = A.state === "thinking" || A.state === "speaking";
+      lastWorking = A.forThisTab
+        && (A.state === "thinking" || A.state === "speaking");
     if (VI && VI.btn)
       VI.btn.style.display =
         ((A.recording ? lastWorking
-                       : A.state === "thinking" || A.state === "speaking")
+                       : A.forThisTab && (A.state === "thinking" || A.state === "speaking"))
          || VI.btnPressed || VI.call)
           ? "block" : "none";
     // With the terminal open, the pill sits centered in the gap between
