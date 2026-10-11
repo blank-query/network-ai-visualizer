@@ -102,7 +102,10 @@ const AV = (() => {
     if (cfg.thinking_sound === false) A._sndWant = false;
     A.faces = cfg.faces || [];
     A.backendWs = String(cfg.backend_ws || "");
-    A.modeHues = cfg.mode_hues || {};
+    // ?hues={"ptt":150,...}: a picked assistant's own mode_hues (the app
+    // loads every face from the Pi, whose config has the Pi's)
+    let qh = null; try { qh = JSON.parse(Q.get("hues")); } catch (e) {}
+    A.modeHues = qh || cfg.mode_hues || {};
     A.setMode = (m) => viPaintMode(m);
     if (DISPLAY) { A._sndWant = false; VI = { connId: Q.get("device") || null }; }
     else if (A.backendWs && !DEMO) viInit();
@@ -1098,17 +1101,16 @@ const AV = (() => {
     });
     return true;
   };
-  // ?frame=<color>: the picked assistant's color around the screen, its
-  // name in the corner, so who's listening is never in doubt
+  // ?frame=<color>: the picked assistant's name in the corner, in its
+  // color, so who's listening is never in doubt (no border: each has its
+  // own face)
   if (Q.get("frame")) (document.readyState === "loading" ? (f) => addEventListener("DOMContentLoaded", f) : (f) => f())(() => {
-    const f = document.createElement("div"), c = Q.get("frame");
-    f.style.cssText = `position:fixed;inset:0;z-index:95;pointer-events:none;border:5px solid ${c};` +
-      "box-sizing:border-box";
+    const c = Q.get("frame");
     const n = document.createElement("div");
     n.textContent = (Q.get("name") || A.name).toUpperCase();
     n.style.cssText = `position:fixed;left:16px;top:calc(12px + env(safe-area-inset-top));z-index:95;` +
       `pointer-events:none;color:${c};font:bold 13px 'SF Mono',Menlo,Consolas,monospace;letter-spacing:.2em`;
-    document.body.append(f, n);
+    document.body.append(n);
   });
 
   function termInit() {
