@@ -469,6 +469,7 @@ const AV = (() => {
           viListen(!!msg.on);
           viPaintMode(msg.on ? (msg.muted ? "paused" : "listening") : "ptt");
         }
+        else if (msg.type === "file_chunk") A.fileChunk(msg);
       } catch (e) { /* ignore */ }
       return;
     }
@@ -981,6 +982,11 @@ const AV = (() => {
     const img = new Image();
     img.src = src; img.style.cssText = "display:block;margin:auto;max-width:none";
     picView.appendChild(img);
+    const x = document.createElement("div");   // a 52 px close mark, clear of the status bar
+    x.innerHTML = "&times;";
+    x.style.cssText = "position:fixed;top:calc(env(safe-area-inset-top,0px) + 36px);right:10px;width:52px;height:52px;" +
+      "line-height:50px;text-align:center;font-size:34px;color:#fff;background:rgba(0,0,0,.55);border-radius:50%;cursor:pointer";
+    picView.appendChild(x);
     let down = null;
     picView.addEventListener("pointerdown", (e) => { e.stopPropagation(); down = [e.clientX, e.clientY]; });
     picView.addEventListener("pointerup", (e) => {
@@ -993,6 +999,57 @@ const AV = (() => {
     const i = e.target.closest && e.target.closest(".av-doc img, .av-t-pic img");
     if (i) A.viewPic(i.src);
   });
+  // A long press on a shown picture offers to save it: the app asks and
+  // saves to the gallery (JarvisApp.saveImage); a browser asks, then downloads.
+  // A file card (a <<show>> of any other file) saves the same way, on a tap
+  // too: the app to Downloads/Jarvis (JarvisApp.saveFile), a browser fetches
+  // it over its socket (file_get, 256 KB file_chunk frames) and downloads it.
+  let pressT = null, pressAt = null, pressed = false;
+  const savePic = (img) => {
+    const name = (img.alt || "jarvis").replace(/[^\w.-]+/g, "_").replace(/\.\w+$/, "") || "jarvis";
+    if (window.JarvisApp && window.JarvisApp.saveImage) return window.JarvisApp.saveImage(img.src, name);
+    if (!confirm("Save this picture?")) return;
+    Object.assign(document.createElement("a"), { href: img.src, download: name + ".jpg" }).click();
+  };
+  const fileWant = {};
+  const saveFile = (card) => {
+    const path = decodeURIComponent(card.dataset.path), name = card.dataset.name;
+    if (window.JarvisApp && window.JarvisApp.saveFile) return window.JarvisApp.saveFile(path, name);
+    if (!VI || !VI.ws || VI.ws.readyState !== 1 || !confirm("Save " + name + "?")) return;
+    fileWant[path] = { name, parts: [] };
+    VI.ws.send(JSON.stringify({ type: "file_get", path }));
+  };
+  A.fileChunk = (m) => {
+    const w = fileWant[m.path];
+    if (!w) return;
+    if (m.error) { delete fileWant[m.path]; alert("Not saved: " + m.error); return; }
+    w.parts.push(Uint8Array.from(atob(m.data || ""), c => c.charCodeAt(0)));
+    if (!m.last) return;
+    delete fileWant[m.path];
+    Object.assign(document.createElement("a"), { href: URL.createObjectURL(new Blob(w.parts)), download: w.name }).click();
+  };
+  addEventListener("click", (e) => { const c = e.target.closest && e.target.closest(".av-file"); if (c) saveFile(c); });
+  addEventListener("pointerdown", (e) => {
+    const card = e.target.closest && e.target.closest(".av-file");
+    if (card) { clearTimeout(pressT); pressed = false; pressAt = [e.clientX, e.clientY];
+      pressT = setTimeout(() => { pressed = true; saveFile(card); }, 600); return; }
+    const img = e.target.closest && e.target.closest(".av-doc img, .av-t-pic img") ||
+      (picView && picView.contains(e.target) && e.target.tagName === "IMG" ? e.target : null);
+    clearTimeout(pressT); pressed = false;
+    if (!img) return;
+    pressAt = [e.clientX, e.clientY];
+    pressT = setTimeout(() => { pressed = true; savePic(img); }, 600);
+  }, true);
+  addEventListener("pointermove", (e) => {
+    if (pressAt && Math.hypot(e.clientX - pressAt[0], e.clientY - pressAt[1]) > 12) clearTimeout(pressT);
+  }, true);
+  addEventListener("pointercancel", () => clearTimeout(pressT), true);
+  addEventListener("pointerup", (e) => {   // a long press is not also a tap (open or close)
+    clearTimeout(pressT); pressAt = null;
+    if (pressed) e.stopPropagation();
+  }, true);
+  addEventListener("click", (e) => { if (pressed) { pressed = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  addEventListener("contextmenu", (e) => { if (e.target.tagName === "IMG") e.preventDefault(); }, true);
 
   /* ------------------------------ a little Markdown ----------------------------- */
   // Enough for replies and notes: headings, lists, bold, italics, inline
@@ -1023,6 +1080,15 @@ const AV = (() => {
       const line = raw.trimEnd(), t = esc(line.trim());
       let m;
       if (!t) { close(); continue; }
+      // a <<show>> file that isn't text or a picture: a card with its name and size
+      if ((m = t.match(/^\[file: ([^\]]*)\]\(jarvis-file:([^)#]+)#(\d+)\)$/))) {
+        const n = +m[3], size = n < 1024 ? n + " B" : n < 2 ** 20 ? (n / 1024).toFixed(0) + " KB" : (n / 2 ** 20).toFixed(1) + " MB";
+        close(); out.push(`<div class="av-file" data-path="${m[2]}" data-name="${m[1]}" style="display:flex;align-items:center;gap:14px;margin:.6em 0;` +
+          `padding:14px 16px;border:1px solid rgba(90,200,130,.45);border-radius:8px;cursor:pointer;user-select:none;-webkit-user-select:none">` +
+          `<svg width="34" height="40" viewBox="0 0 34 40" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 2h19l9 9v27H3z"/><path d="M22 2v9h9"/></svg>` +
+          `<div style="min-width:0"><div style="overflow-wrap:anywhere">${m[1]}</div><div style="opacity:.7;font-size:.85em">${size} · tap to save</div></div></div>`);
+        continue;
+      }
       // a <<show>> picture: the server sends it as one data-URL line
       if ((m = t.match(/^!\[([^\]]*)\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+\/=]+)\)$/))) {
         close(); out.push(`<img alt="${m[1]}" src="${m[2]}" style="display:block;width:100%;height:auto;margin:.6em 0;border-radius:6px;cursor:zoom-in">`);
@@ -1059,7 +1125,7 @@ const AV = (() => {
       "padding:28px 30px 34px;border:1px solid rgba(90,200,130,.45);border-radius:10px;" +
       "background:rgba(6,20,12,.94);color:rgb(200,240,212);font:16px/1.6 'SF Mono',Menlo,Consolas,monospace;" +
       'box-shadow:0 0 40px rgba(60,200,120,.18)">' +
-      '<div class="av-x" style="position:absolute;top:10px;right:16px;cursor:pointer;font-size:22px;color:rgb(120,210,150)">&times;</div>' +
+      '<div class="av-x" style="position:absolute;top:2px;right:2px;width:52px;height:52px;line-height:52px;text-align:center;cursor:pointer;font-size:34px;color:rgb(120,210,150)">&times;</div>' +
       `<h1>${esc(title)}</h1>${mdBlock(md)}</div>`;
     const css = document.getElementById("av-doc-css") || document.head.appendChild(Object.assign(
       document.createElement("style"), { id: "av-doc-css", textContent:
