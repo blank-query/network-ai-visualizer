@@ -685,24 +685,22 @@ const AV = (() => {
       VI.ws.send(JSON.stringify({ type: "interrupt_press" }));
     }
     VI.held = true;   // the finger is down; cleared on release
+    // A tap (not the Interrupt button) pauses playback from the touch, not
+    // once the mic is open: the AudioContext clock freezes, so whatever was
+    // scheduled, and any NEW reply that starts during the press (one did,
+    // over sir, 2026-10-11), waits and plays in order on release.
+    if (!isInterrupt) {
+      pctx.suspend().catch(() => {});
+      VI.pausedForQueue = true;
+    }
     viEnsureCapture().then(ok => {
-      if (!ok || !VI || !VI.ws || VI.ws.readyState !== 1) return;
+      if (!ok || !VI || !VI.ws || VI.ws.readyState !== 1) { viUnpause(); return; }   // no capture: nothing to wait for
       // Released before the mic finished opening (a quick tap): drop the
       // mic again rather than start a recording nobody will ever release.
       if (!VI.held) { viReleaseCapture(); return; }
       A.recording = true;
       if (isInterrupt) return;
       VI.pressActive = true;
-      // A queued tap (not the Interrupt button) pauses playback rather
-      // than touching it: the AudioContext clock freezes, so whatever
-      // was scheduled just picks back up exactly where it left off on
-      // release, nothing lost, nothing restarted.
-      // Unconditional: a context not yet running (resuming just above)
-      // would otherwise start a NEW reply over the press (2026-10-11).
-      if (VI.playCtx) {
-        VI.playCtx.suspend().catch(() => {});
-        VI.pausedForQueue = true;
-      }
       VI.ws.send(JSON.stringify({ type: "press" }));
       if (VI.latched) VI.ws.send(JSON.stringify({ type: "latch" }));
     });
