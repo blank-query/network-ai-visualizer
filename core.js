@@ -86,6 +86,9 @@ const AV = (() => {
     demo: DEMO, shot: SHOT, faces: [],
     _sndOn: true, _mic: false, _readyCbs: [], _ready: false,
     backendWs: "", recording: false,
+    // display mode with ?voice=1: the app's own playback, pushed ~10 times a
+    // second while it sounds ({on, level, samples}, see localVoice)
+    appVoice: { on: false, level: 0, samples: null },
   };
 
   function dotted(name) {
@@ -254,6 +257,16 @@ const AV = (() => {
     // reading IDLE while the model worked). Audio and the Interrupt
     // button still belong to the asking connection only.
     A.forThisTab = forThisTab;
+    // Speaking is what this page (or its app) actually sounds, not the
+    // server's word: its state turns "speaking" as synthesis starts, seconds
+    // ahead of the voice when the speech lags. This device's turn reads
+    // "thinking" until its audio plays; its own audio still playing reads
+    // "speaking" whatever the server says.
+    let lv = localVoice();
+    if (lv && (lv.on || (A.activeConn && String(A.activeConn) === String(VI.connId)))) {
+      if (lv.on) A.state = "speaking";
+      else if (A.state === "speaking") A.state = "thinking";
+    } else lv = null;
     // What a face draws as "listening": this tab recording (a press) or its
     // open mic mid-utterance (hands-free), never the global bus state,
     // which every tab polls. The demo script stands in for both.
@@ -313,7 +326,7 @@ const AV = (() => {
       // otherwise the envelope and waveform ring keep tracking the
       // OTHER tab's real audio regardless, and the blob still visibly
       // pulses in lockstep with a reply this tab never asked for.
-      A.level = forThisTab ? (raw.level || 0) : 0;
+      A.level = lv ? lv.level : forThisTab ? (raw.level || 0) : 0;
 
       // adaptive envelope: normalize against a decaying peak, then ease
       // (attack 50ms, release 350ms) — motion code rides AV.env
@@ -325,7 +338,7 @@ const AV = (() => {
 
       // waveform ring: rectify, normalize against its own decaying peak,
       // blend toward the newest frame so the ring flows instead of flickers
-      const s = forThisTab ? raw.samples : null;
+      const s = lv ? lv.samples : forThisTab ? raw.samples : null;
       A.rawSamples = s && s.length ? s : null;   // signed, int16-scale floats
       if (s && s.length) {
         let mx = 0;
@@ -424,6 +437,10 @@ const AV = (() => {
   function viPlayCtx() {
     if (!VI.playCtx) {
       VI.playCtx = new AudioContext(); VI.nextPlayTime = 0;
+      // every reply chunk plays through this, so the face reads its real level
+      VI.an = VI.playCtx.createAnalyser(); VI.an.fftSize = 1024;
+      VI.an.connect(VI.playCtx.destination);
+      VI.anBuf = new Float32Array(VI.an.fftSize);
       // A page may not make sound until it has been clicked once (after
       // a reload, hands-free has no press to count). Show why, and let
       // ANY click anywhere unlock it.
@@ -499,7 +516,7 @@ const AV = (() => {
     for (let i = 0; i < i16.length; i++) { chan[i] = i16[i] / 32768; sq += i16[i] * i16[i]; }
     const src = ctx.createBufferSource();
     src.buffer = abuf;
-    src.connect(ctx.destination);
+    src.connect(VI.an);
     const now = ctx.currentTime;
     if (VI.nextPlayTime < now + 0.02) VI.nextPlayTime = now + 0.05;
     src.start(VI.nextPlayTime);
@@ -514,6 +531,24 @@ const AV = (() => {
       const i = VI.sources.indexOf(src);
       if (i >= 0) VI.sources.splice(i, 1);
     };
+  }
+  // The reply as this page sounds it now: {on, level, samples (int16
+  // scale, like the server's)}, or null when it doesn't play the reply
+  // itself (no player, a call, or an app that doesn't push its own).
+  function localVoice() {
+    if (DISPLAY) return Q.get("voice") === "1" ? A.appVoice : null;
+    if (!VI || !VI.an || VI.call) return null;
+    const ctx = VI.playCtx;
+    if (ctx.state !== "running" || !(VI.nextPlayTime > ctx.currentTime))
+      return { on: false, level: 0, samples: null };
+    VI.an.getFloatTimeDomainData(VI.anBuf);
+    const n = VI.anBuf.length, samples = new Array(64);
+    let sum = 0;
+    for (let i = 0; i < 64; i++) {
+      samples[i] = VI.anBuf[Math.round(i * (n - 1) / 63)] * 32768;
+      sum += Math.abs(samples[i]);
+    }
+    return { on: true, level: Math.min(1, sum / 64 / 3000), samples };
   }
   function viStopPlayback() {
     // An interrupt: every chunk already sent but not yet played gets
@@ -662,7 +697,9 @@ const AV = (() => {
       // than touching it: the AudioContext clock freezes, so whatever
       // was scheduled just picks back up exactly where it left off on
       // release, nothing lost, nothing restarted.
-      if (VI.playCtx && VI.playCtx.state === "running") {
+      // Unconditional: a context not yet running (resuming just above)
+      // would otherwise start a NEW reply over the press (2026-10-11).
+      if (VI.playCtx) {
         VI.playCtx.suspend().catch(() => {});
         VI.pausedForQueue = true;
       }
